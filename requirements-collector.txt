@@ -1,6 +1,10 @@
 # Installed by GitHub Actions (.github/workflows/collect.yml) for the scheduled collection run.
-# CPU-only PyTorch for Linux / Python 3.12 (the default PyPI build pulls ~3 GB of GPU libraries).
-torch @ https://download.pytorch.org/whl/cpu/torch-2.14.1%2Bcpu-cp312-cp312-manylinux_2_28_x86_64.whl
+# CPU-only PyTorch for Linux (the default PyPI build pulls ~3 GB of GPU libraries). The workflow uses
+# Python 3.12; the other lines keep it working if that is ever changed.
+torch @ https://download.pytorch.org/whl/cpu/torch-2.14.1%2Bcpu-cp311-cp311-manylinux_2_28_x86_64.whl ; python_version == "3.11"
+torch @ https://download.pytorch.org/whl/cpu/torch-2.14.1%2Bcpu-cp312-cp312-manylinux_2_28_x86_64.whl ; python_version == "3.12"
+torch @ https://download.pytorch.org/whl/cpu/torch-2.14.1%2Bcpu-cp313-cp313-manylinux_2_28_x86_64.whl ; python_version == "3.13"
+torch @ https://download.pytorch.org/whl/cpu/torch-2.14.1%2Bcpu-cp314-cp314-manylinux_2_28_x86_64.whl ; python_version == "3.14"
 sentence-transformers==6.1.0
 chromadb==1.5.9
 trafilatura

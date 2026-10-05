@@ -85,7 +85,7 @@ GitHub Actions (6x a day)  ──writes──▶  Chroma Cloud  ◀──reads�
 1. **Chroma Cloud:** sign up at trychroma.com and create a database. Note the **API key**, **tenant** and **database** name.
 2. **Copy the news you already have** (optional, one time): put `CHROMA_API_KEY`, `CHROMA_TENANT` and `CHROMA_DATABASE` into `.env`, then run `python -m scripts.migrate_to_cloud`.
 3. **GitHub:** repo → *Settings → Secrets and variables → Actions → New repository secret*. Add `CHROMA_API_KEY`, `CHROMA_TENANT`, `CHROMA_DATABASE`, and optionally `GROQ_API_KEY` (summaries), `ANTHROPIC_API_KEY` (briefing takeaways) and `GNEWS_API_KEY`. Then go to *Actions → Collect news → Run workflow* to test it.
-4. **Streamlit Cloud:** main file `app/streamlit_app.py`, *Advanced settings → Python 3.12*, and these Secrets:
+4. **Streamlit Cloud:** main file `app/streamlit_app.py` (any Python from 3.11 to 3.14), and these Secrets:
    ```toml
    CHROMA_API_KEY = "..."
    CHROMA_TENANT = "..."
