@@ -1,0 +1,152 @@
+{
+  "name": "01 News Fetcher (RSS -> Filter & Tidy -> Ingest)",
+  "nodes": [
+    {
+      "id": "c44e9f67-6300-40e9-9cc6-ed36113e96fd",
+      "name": "Every day 6:30 AM",
+      "type": "n8n-nodes-base.scheduleTrigger",
+      "typeVersion": 1.2,
+      "position": [
+        0,
+        0
+      ],
+      "parameters": {
+        "rule": {
+          "interval": [
+            {
+              "triggerAtHour": 6,
+              "triggerAtMinute": 30
+            }
+          ]
+        }
+      }
+    },
+    {
+      "id": "292f21c3-0f03-4fa9-84c2-ba01a6a22d5e",
+      "name": "Feed List",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        220,
+        0
+      ],
+      "parameters": {
+        "jsCode": "// One item per RSS feed. Open each URL in your browser first; replace any that don't load.\n// category must be tech / finance / politics (matches RULES in \"Filter & Tidy\").\nconst FEEDS = [\n  { category: 'tech', source: 'TechCrunch', url: 'https://techcrunch.com/feed/' },\n  { category: 'tech', source: 'ET Tech', url: 'https://economictimes.indiatimes.com/tech/rssfeeds/13357270.cms' },\n  { category: 'finance', source: 'ET Markets', url: 'https://economictimes.indiatimes.com/markets/rssfeeds/1977021501.cms' },\n  { category: 'finance', source: 'Mint Markets', url: 'https://www.livemint.com/rss/markets' },\n  { category: 'politics', source: 'The Hindu', url: 'https://www.thehindu.com/news/national/feeder/default.rss' },\n  { category: 'politics', source: 'Indian Express', url: 'https://indianexpress.com/section/india/feed/' },\n];\n\nreturn FEEDS.map((feed) => ({ json: feed }));\n"
+      }
+    },
+    {
+      "id": "b40126d1-2bb2-45c5-8fbb-066267917aeb",
+      "name": "Read RSS",
+      "type": "n8n-nodes-base.rssFeedRead",
+      "typeVersion": 1.1,
+      "position": [
+        440,
+        0
+      ],
+      "parameters": {
+        "url": "={{ $json.url }}",
+        "options": {}
+      },
+      "retryOnFail": true,
+      "maxTries": 3,
+      "waitBetweenTries": 2000,
+      "onError": "continueRegularOutput"
+    },
+    {
+      "id": "74713b42-d211-4845-84d7-cdcfa6c897fc",
+      "name": "Filter & Tidy",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        660,
+        0
+      ],
+      "parameters": {
+        "jsCode": "// FILTER & TIDY — turns raw RSS items into clean, tagged, relevant articles.\n//\n// Tidy:   strip HTML/entities, trim whitespace, clean tracking params off URLs,\n//         convert dates to ISO, shorten snippets, add category + source.\n// Filter: drop broken items, old items, \"drop\" words, off-topic items\n//         (strict categories need at least one \"keep\" word), duplicates.\n\n// ---- Settings you can tune ----------------------------------------------\nconst RULES = {\n  tech: {\n    strict: false, // tech feeds are already on-topic, so only the drop list applies\n    keep: ['ai', 'artificial intelligence', 'startup', 'funding', 'chip', 'semiconductor', 'software',\n      'cyber', 'cloud', 'data', 'smartphone', 'app', 'telecom', '5g', 'it services', 'launch'],\n    drop: ['deal of the day', 'discount', 'sale', 'giveaway', 'horoscope'],\n  },\n  finance: {\n    strict: true, // Moneycontrol \"latest\" mixes in everything, so require a finance word\n    keep: ['repo rate', 'rbi', 'sensex', 'nifty', 'earnings', 'result', 'sebi', 'inflation', 'gdp',\n      'ipo', 'rupee', 'bank', 'fii', 'gst', 'budget', 'stock', 'share', 'market', 'mutual fund'],\n    drop: ['lifestyle', 'recipe', 'horoscope', 'astrology', 'celebrity'],\n  },\n  politics: {\n    strict: true,\n    keep: ['parliament', 'lok sabha', 'rajya sabha', 'minister', 'cabinet', 'election', 'bill',\n      'supreme court', 'high court', 'government', 'policy', 'chief minister', 'opposition', 'party'],\n    drop: ['bollywood', 'cricket', 'box office', 'horoscope', 'recipe'],\n  },\n};\nconst MAX_AGE_HOURS = 36; // ignore anything older than this\nconst SNIPPET_CHARS = 500;\n\n// ---- Helpers --------------------------------------------------------------\nconst ENTITIES = { '&amp;': '&', '&lt;': '<', '&gt;': '>', '&quot;': '\"', '&#39;': \"'\", '&apos;': \"'\", '&nbsp;': ' ' };\n\nfunction clean(text) {\n  return String(text ?? '')\n    .replace(/<!\\[CDATA\\[|\\]\\]>/g, '')\n    .replace(/<[^>]*>/g, ' ')\n    .replace(/&#(\\d+);/g, (_, n) => String.fromCharCode(Number(n)))\n    .replace(/&[a-z0-9#]+;/gi, (e) => ENTITIES[e.toLowerCase()] ?? ' ')\n    .replace(/\\s+/g, ' ')\n    .trim();\n}\n\n// Plain string handling on purpose: n8n Cloud's Code sandbox may not have the URL class.\nfunction cleanUrl(raw) {\n  const s = String(raw ?? '').trim();\n  if (!/^https?:\\/\\/[^\\s/?#]+/i.test(s)) return null;\n  const [path, query] = s.split('#')[0].split('?');\n  if (!query) return path;\n  const params = query.split('&').filter((p) => p && !/^(utm_[^=]*|fbclid|gclid|ref)(=|$)/i.test(p));\n  return params.length ? `${path}?${params.join('&')}` : path;\n}\n\nconst hostname = (url) => url.match(/^https?:\\/\\/(?:www\\.)?([^/?#:]+)/i)[1];\n\nconst escapeRe = (s) => s.replace(/[.*+?^${}()|[\\]\\\\]/g, '\\\\$&');\n// Whole-word match, plural allowed: \"market\" matches \"markets\" but \"ai\" doesn't match \"said\".\nconst matches = (text, words) => words.filter((w) => new RegExp(`\\\\b${escapeRe(w)}s?\\\\b`, 'i').test(text));\n\n// ---- Main -----------------------------------------------------------------\nconst cutoff = Date.now() - MAX_AGE_HOURS * 3600 * 1000;\nconst seenUrls = new Set();\nconst seenTitles = new Set();\nconst stats = { received: 0, broken: 0, tooOld: 0, dropWord: 0, offTopic: 0, duplicate: 0, kept: 0 };\nconst kept = [];\n\n$input.all().forEach((item, i) => {\n  stats.received++;\n  const j = item.json;\n\n  // Which feed did this item come from? (n8n links each RSS item back to its Feed List row)\n  let feed = {};\n  try { feed = $('Feed List').itemMatching(i).json; } catch (e) { /* fall back below */ }\n\n  const title = clean(j.title);\n  const url = cleanUrl(j.link || j.guid);\n  if (!title || !url) { stats.broken++; return; } // also catches failed feeds (error items)\n\n  const ts = Date.parse(j.isoDate || j.pubDate);\n  if (!Number.isNaN(ts) && ts < cutoff) { stats.tooOld++; return; }\n\n  const category = feed.category || 'unknown';\n  const rules = RULES[category] || { strict: false, keep: [], drop: [] };\n  const snippet = clean(j.contentSnippet || j.content || j.description).slice(0, SNIPPET_CHARS);\n  const text = `${title} ${snippet}`;\n\n  if (matches(text, rules.drop).length) { stats.dropWord++; return; }\n  const hits = matches(text, rules.keep);\n  if (rules.strict && hits.length === 0) { stats.offTopic++; return; }\n\n  const titleKey = title.toLowerCase().replace(/[^a-z0-9 ]/g, '');\n  if (seenUrls.has(url) || seenTitles.has(titleKey)) { stats.duplicate++; return; }\n  seenUrls.add(url);\n  seenTitles.add(titleKey);\n\n  stats.kept++;\n  kept.push({\n    json: {\n      title,\n      url,\n      published: new Date(Number.isNaN(ts) ? Date.now() : ts).toISOString(),\n      source: feed.source || hostname(url),\n      category,\n      snippet,\n      keywords: hits,\n    },\n  });\n});\n\nconsole.log('Filter & Tidy stats:', JSON.stringify(stats));\n\n// Zero articles is never normal - fail loudly with the reason instead of silently stopping the workflow.\nif (kept.length === 0) {\n  const sample = $input.all()[0]?.json ?? {};\n  throw new Error(`Filter & Tidy kept 0 articles. Stats: ${JSON.stringify(stats)}. `\n    + `First input item fields: ${Object.keys(sample).join(', ') || 'none'}`);\n}\nreturn kept;\n"
+      }
+    },
+    {
+      "id": "29bc2daf-6a41-49dd-acf1-93dabeec814f",
+      "name": "Send to Python /ingest",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [
+        880,
+        0
+      ],
+      "parameters": {
+        "method": "POST",
+        "url": "http://127.0.0.1:8000/ingest",
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "={{ JSON.stringify({ articles: $input.all().map(i => i.json) }) }}",
+        "options": {
+          "timeout": 600000
+        },
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": [
+            {
+              "name": "X-Ingest-Token",
+              "value": "PASTE_INGEST_TOKEN_FROM_.env"
+            }
+          ]
+        }
+      },
+      "executeOnce": true,
+      "retryOnFail": true,
+      "maxTries": 3,
+      "waitBetweenTries": 5000
+    }
+  ],
+  "connections": {
+    "Every day 6:30 AM": {
+      "main": [
+        [
+          {
+            "node": "Feed List",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Feed List": {
+      "main": [
+        [
+          {
+            "node": "Read RSS",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Read RSS": {
+      "main": [
+        [
+          {
+            "node": "Filter & Tidy",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Filter & Tidy": {
+      "main": [
+        [
+          {
+            "node": "Send to Python /ingest",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    }
+  },
+  "settings": {
+    "executionOrder": "v1"
+  },
+  "pinData": {}
+}

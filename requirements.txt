@@ -1,0 +1,19 @@
+# ingest service (Phase 2)
+fastapi
+uvicorn[standard]
+trafilatura
+chromadb
+sentence-transformers
+spacy
+python-dotenv
+# LLMs - one key is enough (see .env.example)
+anthropic
+groq
+# fetcher agents + orchestrator
+feedparser
+requests
+langgraph
+apscheduler
+# RAG + app
+rank-bm25
+streamlit

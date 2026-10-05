@@ -1,0 +1,106 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1000 900" width="1000" height="900" font-family="Segoe UI, Helvetica, Arial, sans-serif">
+  <defs>
+    <marker id="arrow" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse">
+      <path d="M0,0 L10,5 L0,10 z" fill="#5b6475"/>
+    </marker>
+    <style>
+      .t  { font-size: 17px; font-weight: 700; fill: #1d2433; }
+      .s  { font-size: 12.5px; fill: #3d4657; }
+      .xs { font-size: 11.5px; fill: #5b6475; }
+      .lbl{ font-size: 12px; fill: #5b6475; font-style: italic; }
+      .line { stroke: #5b6475; stroke-width: 1.6; fill: none; marker-end: url(#arrow); }
+    </style>
+  </defs>
+  <rect width="1000" height="900" fill="#ffffff"/>
+  <text x="500" y="38" text-anchor="middle" style="font-size:22px;font-weight:700;fill:#1d2433">Multi-Agent AI News Analyst — Architecture</text>
+
+  <!-- Scheduler -->
+  <rect x="300" y="62" width="400" height="58" rx="10" fill="#eef1f6" stroke="#9aa3b2"/>
+  <text x="500" y="86" text-anchor="middle" class="t">Scheduler</text>
+  <text x="500" y="106" text-anchor="middle" class="s">APScheduler (every 3 h + 07:00 briefing)  ·  or n8n Schedule trigger</text>
+
+  <!-- Orchestrator frame -->
+  <rect x="30" y="140" width="940" height="200" rx="14" fill="none" stroke="#7c6cf2" stroke-dasharray="6 5" stroke-width="1.5"/>
+  <text x="48" y="162" class="lbl" style="fill:#5a4bd1">Orchestrator — LangGraph StateGraph (agents/orchestrator.py): parallel fan-out · per-feed retries · node retry policy · run log</text>
+
+  <path class="line" d="M400 120 L170 180"/>
+  <path class="line" d="M500 120 L500 180"/>
+  <path class="line" d="M600 120 L830 180"/>
+
+  <!-- Agents -->
+  <rect x="50" y="182" width="270" height="140" rx="10" fill="#e7f0ff" stroke="#4c7bd9"/>
+  <text x="185" y="206" text-anchor="middle" class="t">💻 Tech Agent</text>
+  <text x="185" y="228" text-anchor="middle" class="s">TechCrunch · ET Tech · The Hindu Tech</text>
+  <text x="185" y="246" text-anchor="middle" class="s">Mint Technology · Gadgets 360 (+ GNews)</text>
+  <text x="185" y="272" text-anchor="middle" class="xs">keep: AI, chips, startups, telecom, cyber…</text>
+  <text x="185" y="290" text-anchor="middle" class="xs">drop: deals, discounts, giveaways</text>
+
+  <rect x="365" y="182" width="270" height="140" rx="10" fill="#e6f6ec" stroke="#3a9a5b"/>
+  <text x="500" y="206" text-anchor="middle" class="t">💹 Finance Agent</text>
+  <text x="500" y="228" text-anchor="middle" class="s">RBI · SEBI (official) · ET Markets</text>
+  <text x="500" y="246" text-anchor="middle" class="s">Mint · Business Standard · Hindu Economy</text>
+  <text x="500" y="272" text-anchor="middle" class="xs">keep: repo rate, Sensex, earnings, IPO…</text>
+  <text x="500" y="290" text-anchor="middle" class="xs">drop: lifestyle, routine RBI auction notices</text>
+
+  <rect x="680" y="182" width="270" height="140" rx="10" fill="#fdeee6" stroke="#d07a3c"/>
+  <text x="815" y="206" text-anchor="middle" class="t">🏛️ Politics Agent</text>
+  <text x="815" y="228" text-anchor="middle" class="s">PIB (official) · The Hindu National</text>
+  <text x="815" y="246" text-anchor="middle" class="s">Indian Express · Mint Politics</text>
+  <text x="815" y="272" text-anchor="middle" class="xs">keep: Parliament, ministers, courts, polls…</text>
+  <text x="815" y="290" text-anchor="middle" class="xs">drop: cricket, Bollywood, non-English</text>
+
+  <text x="500" y="314" text-anchor="middle" class="xs">each agent: tidy HTML/URLs/dates → relevance rules → ≤36 h old → dedupe → headline, snippet, URL, date, source</text>
+
+  <path class="line" d="M185 322 L420 372"/>
+  <path class="line" d="M500 322 L500 372"/>
+  <path class="line" d="M815 322 L580 372"/>
+  <text x="660" y="352" class="lbl">POST /ingest (X-Ingest-Token)</text>
+  <text x="660" y="367" class="lbl">— the n8n workflow posts here too</text>
+
+  <!-- Processing -->
+  <rect x="130" y="374" width="740" height="100" rx="10" fill="#f4efff" stroke="#7c6cf2"/>
+  <text x="500" y="398" text-anchor="middle" class="t">⚙️ Processing Agent — FastAPI ingest service (ingest/main.py)</text>
+  <text x="500" y="422" text-anchor="middle" class="s">1 exact dedupe (URL hash) → 2 full text (trafilatura) → 3 near-duplicate check (embedding ≥ 0.90, 3 days)</text>
+  <text x="500" y="442" text-anchor="middle" class="s">→ 4 entities (spaCy: ORG / PERSON / GPE) → 5 2–3 line summary (LLM) → 6 chunks of ~400 tokens, 50 overlap</text>
+  <text x="500" y="462" text-anchor="middle" class="xs">async job queue (202 + /jobs/{id}) · per-batch report in ingest_log.jsonl</text>
+
+  <path class="line" d="M500 474 L500 504"/>
+
+  <!-- KB -->
+  <rect x="200" y="506" width="600" height="84" rx="10" fill="#fff7dd" stroke="#c9a227"/>
+  <text x="500" y="530" text-anchor="middle" class="t">🗄️ Knowledge Base — ChromaDB (local, persistent)</text>
+  <text x="500" y="552" text-anchor="middle" class="s">bge-small-en-v1.5 embeddings · collections: articles (dedupe) + chunks (search)</text>
+  <text x="500" y="572" text-anchor="middle" class="s">metadata: published date/ts · category · source · URL · entities · summary</text>
+
+  <path class="line" d="M500 590 L500 620"/>
+
+  <!-- RAG -->
+  <rect x="60" y="622" width="880" height="128" rx="10" fill="#e8f7f7" stroke="#2e9a9a"/>
+  <text x="500" y="646" text-anchor="middle" class="t">🔎 RAG Query Engine (rag/engine.py)</text>
+  <g class="s">
+    <text x="80"  y="676">① Understand</text>
+    <text x="80"  y="694" class="xs">time range + category</text>
+    <text x="80"  y="710" class="xs">("this week", "yesterday")</text>
+    <text x="250" y="676">② Hybrid retrieve</text>
+    <text x="250" y="694" class="xs">Chroma semantic + BM25</text>
+    <text x="250" y="710" class="xs">fused with RRF, date filter</text>
+    <text x="430" y="676">③ Rerank</text>
+    <text x="430" y="694" class="xs">bge-reranker + recency</text>
+    <text x="430" y="710" class="xs">(3-day half-life) + category</text>
+    <text x="610" y="676">④ Generate</text>
+    <text x="610" y="694" class="xs">Claude / Groq, sources only,</text>
+    <text x="610" y="710" class="xs">date-aware prompt</text>
+    <text x="780" y="676">⑤ Cite</text>
+    <text x="780" y="694" class="xs">[n] → link + date, or</text>
+    <text x="780" y="710" class="xs">"I don't have news on that."</text>
+  </g>
+  <text x="500" y="738" text-anchor="middle" class="xs">Today's Briefing (rag/briefing.py): last 24 h per category → cited bullets, cached once a day</text>
+
+  <path class="line" d="M500 750 L500 780"/>
+
+  <!-- UI -->
+  <rect x="200" y="782" width="600" height="84" rx="10" fill="#ffeef3" stroke="#d24d7a"/>
+  <text x="500" y="806" text-anchor="middle" class="t">💬 Chat Interface — Streamlit (app/streamlit_app.py)</text>
+  <text x="500" y="828" text-anchor="middle" class="s">chat with clickable citations · category filter · date picker</text>
+  <text x="500" y="848" text-anchor="middle" class="s">☀️ Today's Briefing tab · 📊 collection log tab</text>
+</svg>

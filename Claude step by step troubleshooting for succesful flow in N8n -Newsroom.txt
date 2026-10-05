@@ -1,0 +1,280 @@
+I found the plan. It isn't in any past Claude Code session; it was saved in a Word file, probably from a claude.ai chat:
+GoldenEagle Program\Capstone project1_News_reader_room.docx, last edited 30 Sep 2026.
+
+How it fits together
+
+n8n: schedule → RSS fetch → filter → tidy
+        │  HTTP POST (articles as JSON)
+        ▼
+Python FastAPI /ingest → clean → remove duplicates → tag → chunk → embed → ChromaDB
+                                                                          │
+Streamlit chat → RAG engine (search → rerank → Groq LLM) ─────────────────┘
+The 6 phases (about 5–6 weeks)
+0. Setup: install Python 3.11+, VS Code, Git and Docker, and get a Groq API key. A GNews key is optional.
+
+n8n news fetcher (Week 1): n8n runs in Docker and starts each morning at 6:30.
+It reads 3–5 news feeds for each topic:
+Tech: TechCrunch, ET Tech
+Finance: ET Markets, Moneycontrol, Mint, RBI
+Politics: PIB, The Hindu, Indian Express
+Each article is cleaned up and filtered by keywords.
+The articles are combined and sent to host.docker.internal:8000/ingest, with automatic retries and an error workflow.
+Python ingest service (Weeks 2–3), for each article:
+Skip it if the same link or a near-identical story (over 0.9 similar) is already stored.
+Get the full text with trafilatura.
+Pull out people, organisations and places with spaCy.
+Write a short summary with Groq.
+Split it into chunks of about 400 tokens, embed them with bge-small-en-v1.5 and store them in ChromaDB with category, source and date.
+Answer engine answer() (Weeks 3–4):
+The LLM works out the topic and time range from the question.
+It searches by meaning (Chroma) and by keyword (BM25), then re-ranks the results with bge-reranker-base.
+Groq writes the answer and must cite its sources. If the news doesn't cover it, it replies exactly: "I don't have news on that."
+Streamlit chat (Week 4): a chat window, a sidebar to pick topics and dates, and source links under each answer. An optional "Today's Briefing" panel runs from a second n8n workflow at 7 AM.
+Testing (Week 5): 25 test questions:
+15 the news can answer
+5 about recent dates ("yesterday", "this week")
+5 it shouldn't be able to answer
+Score them by hand and with RAGAS, then write a 2-page report.
+
+Packaging (Week 6): README, an architecture diagram, the code on GitHub, and a 10-minute demo script.
+Where you are: GoldenEagle Program\Capstone1_Newsreader\ already has the folder layout (app, ingest, n8n, rag, eval, data_chroma, .env), but there's no code in it yet. Your earlier RAG\ project (INGEST.PY / CHAT.PY with Chroma) and the n8n workflow GE03 - Daily AI News Digest.json are good starting points to reuse.
+
+I've added these details to the project memory. The plan ended by offering to write the Phase 2 ingest code next, or I can start with the Phase 1 n8n workflow.
+
+n8n: schedule → RSS fetch → filter → tidy how to achieve filter & tidy this after getting RSS feed
+
+I'll build this as an n8n workflow you can import, so you can see the filter and tidy steps working rather than just reading about them. First I'll write and test the two Code nodes.
+
+
+Ran a command, created 2 files
++126
+-0
+Now a quick test using fake RSS items that mimic what n8n produces:
+
+Ran filter/tidy code against sample RSS items
+Every rule worked on the test items. Now I'll put it together as an importable workflow in your project's n8n/ folder.
+
+Built importable n8n workflow JSON into project n8n folder
+I've built a workflow you can import into n8n, with the filter and tidy steps already set up: 01_news_fetcher.json. I tested the filter and tidy code against fake RSS items, and every rule worked. I haven't run the workflow inside n8n yet, and I haven't checked that the feed links work.
+
+The workflow
+Schedule (6:30 AM) → Feed List → Read RSS → Filter & Tidy → Send to Python /ingest
+Change from your plan: your plan has three RSS branches, each with its own Set and Code node, then a Merge. But one RSS Read node can only read one link, so 3–5 feeds per topic would mean 9–15 RSS nodes. Instead, a Feed List node lists every feed with its topic and source name. One Read RSS node then reads each feed in turn, and one Code node does all the filtering and tidying. You get the same result with 5 nodes instead of about 20, and adding a feed is a one-line edit.
+
+Tidy: cleaning each article
+RSS output is messy, with HTML tags, codes like &amp;, tracking links and mixed date formats. The Filter & Tidy node:
+
+Raw RSS field	After tidying
+title	HTML tags removed, &amp; turned back into &, extra spaces removed
+link / guid → url	tracking bits (utm_*, fbclid, #section) removed, so the same story shows up as the same link
+isoDate / pubDate → published	one standard date format (ISO)
+contentSnippet → snippet	cleaned and cut to 500 characters
+(new) category, source	taken from the Feed List row the article came from
+(new) keywords	which topic words matched, which helps when checking the output
+Filter: which articles get dropped
+Each article goes through these checks in order. The first one it fails removes it:
+
+Broken: no title or link. This also catches feeds that failed to load; Read RSS is set to retry 3 times and then carry on rather than stop the whole run.
+Too old: more than 36 hours old.
+Drop word: "recipe", "horoscope", "cricket" and similar. Words only count as whole words, with plurals allowed, so "ai" won't match "said".
+Off-topic: Finance and Politics articles must contain at least one topic word (RBI, Sensex, Lok Sabha…). Tech articles are only checked against the drop list, because tech feeds are already on-topic.
+Duplicate: the same link or the same title already appeared in this run. Spotting the same story told differently by different outlets is left to the Python ingest step (Phase 2).
+You can tune all of this in the RULES block at the top of the code. The node also logs a count of how many articles each rule removed, which feeds your daily collection report.
+
+How to use it
+In n8n: Workflows → ⋯ → Import from File → choose 01_news_fetcher.json.
+Open Feed List and check that each link opens in your browser. Replace any that don't, and add PIB if you want it.
+Click Execute workflow, then open Filter & Tidy to see the cleaned articles. The removal counts appear in the browser console (F12).
+Send to Python /ingest is switched off for now, because the Python service doesn't exist until Phase 2. Switch it on once the Python service is running on port 8000.
+If a problem shows up: if every article shows category: "unknown", n8n has lost track of which feed each article came from. Tell me and I'll change how the topic gets attached.
+
+Next I can write the Phase 2 Python /ingest service that receives these articles.
+
+The enclosure and error columns are good news. Read RSS is working. n8n's table shows a column for every field found in any item. enclosure comes from real articles (it's the attached image). error appears because at least one feed failed. For the article rows it's undefined, which means those rows have no error.
+
+So the articles reach Filter & Tidy, and it returns 0 items. When a node returns 0 items, n8n stops there, which is why the Send node never gets anything.
+
+Likely cause: n8n Cloud runs Code nodes in a restricted environment. My code uses JavaScript's built-in URL tool to clean links, and that tool may not exist there. If it doesn't, every link counts as broken and every article gets dropped. On my machine URL exists, which is why my test kept 138 articles. I'll rewrite the code so it doesn't need URL. If it still keeps nothing, the node will now show a red error saying exactly which rule removed the articles.
+
+Edited
+filter_tidy.js
++17
+-11
+Next I'll test the new code with JavaScript's URL tool removed, the same way it may be missing on n8n Cloud, and remove the dead Moneycontrol feed:
+
+Tested updated Filter & Tidy without the URL class
+The updated code no longer depends on URL and now shows a clear error message instead of failing silently. I'll save it into your project as copyable files and update the workflow file next.
+
+Saved code files to project and updated workflow JSON
+Last check: are the Python service and the tunnel both still running for when you rerun the workflow?
+
+Checked tunnel and ingest service are reachable
+Read RSS is working; the problem is in the Filter & Tidy code. It most likely threw out every article on n8n Cloud, and when a node returns 0 items, n8n stops there. That's why the Send node never got anything. I've rewritten that code, but you need to paste it into your workflow. The service and tunnel are both still reachable, so you can run again straight away.
+
+Why it happened: n8n Cloud runs Code nodes in a restricted environment that may not include JavaScript's built-in URL tool, which my code used to clean links. Without it, every link looked broken and every article was removed. The new code cleans links with plain text handling. I ran it on today's real feeds with URL removed and it kept 138 articles. I can't run it on n8n Cloud itself, so step 5 below is the real test.
+
+The new code also won't fail silently again. If it keeps 0 articles, the node turns red with a message like kept 0 articles. Stats: {"broken": 120, "tooOld": 0, ...}, which shows exactly which rule removed them.
+
+What to do in n8n Cloud (in the newer copy, bphCnZsTlgnaquY7)
+Filter & Tidy: open the node, select all the code (Ctrl+A), delete it, and paste the whole contents of Capstone1_Newsreader\n8n\filter_tidy.js (open it in Notepad).
+Feed List: paste the contents of feed_list.js the same way. This removes the dead Moneycontrol feed.
+Leave Send to Python /ingest as it is. Your tunnel URL and password header stay.
+Save (Ctrl+S).
+Click Execute workflow. Filter & Tidy should now show articles, and the Send node should show the collection report.
+If Filter & Tidy turns red, copy the error message and send it to me; the counts in it tell us the next fix.
+
+I also updated 01_news_fetcher.json with the new code, for any future import.
+
+the request was blocked because it resolves to a restricted IP address
+
+That's good progress. The error comes from the Send to Python /ingest node, which means Filter & Tidy now produces articles and they reached the Send step.
+
+Why it's blocked: n8n Cloud refuses to send requests to private addresses like 127.0.0.1, as a security protection. On n8n Cloud, 127.0.0.1 means n8n's own server, not your laptop. The copy you're running still has the local address http://127.0.0.1:8000/ingest, probably because it came from the imported file, which is set up for local n8n.
+
+Fix: point it at the tunnel. Open the Send to Python /ingest node and set:
+
+URL: https://per-services-reform-stephanie.trycloudflare.com/ingest
+Headers: X-Ingest-Token = the text after INGEST_TOKEN= in Capstone1_Newsreader\.env. Make sure it's your real password, not the placeholder PASTE_INGEST_TOKEN_FROM_.env.
+Options → Timeout: 600000
+Then save and click Execute workflow. The tunnel address is a public one, so n8n Cloud allows it. I checked a minute ago that the tunnel and the Python service are both reachable.
+
+If you see a different error next:
+
+Error	Meaning
+401 Wrong or missing X-Ingest-Token	the header value doesn't match .env
+502 / 530 or "could not resolve"	the tunnel stopped. Run start_tunnel.bat and use the new address it prints
+timeout	check the timeout is 600000. The first run downloads every article's full text, which takes a few minutes
+When it works, the Send node shows the collection report (received, stored…). Send me those numbers.
+
+
+Background command stopped
+· Run Cloudflare quick tunnel to ingest service
+The tunnel I started earlier was stopped automatically: background tasks in this session have a time limit. That breaks the address I gave you, so n8n can't reach the service through it now.
+
+To avoid that, I'll start the tunnel in its own window on your desktop, outside this session, so it keeps running. I'm also making it save its address to a file so I can read it for you.
+
+
+Read and edited start_tunnel.bat, ran 3 commands
++4
+-1
+The tunnel is up at a new address, but requests through it time out before reaching the Python service. Also, two tunnel programs are running, which is one too many. Checking the service directly:
+
+Checked local service and running tunnel/python processes
+The service isn't responding to the health check — it could be mid-run or its window may be frozen from a Windows click-pause. I'll check if the database is still changing to tell which it is.
+
+Checked whether Chroma database files are being written
+The database is frozen, likely because the service's console window got clicked and paused it (a common Windows quirk). I'll first stop the extra tunnel process I started earlier (11148) so only one remains running.
+
+
+Ran 2 commands, finished a background command
+The leftover process is your own tunnel window, which restarted with the new settings while I was editing the file—leaving two tunnels running (yours: 31432, mine: 896). I'll stop mine, keep yours, and grab the new address from your tunnel.
+
+Stopped my tunnel, list tunnel addresses, recheck service
+The n8n run can't work yet: the Python service on your laptop is frozen, and the tunnel address you were using is gone. Here's what happened:
+
+The tunnel address changed. The tunnel I ran from this session was stopped automatically by a time limit. The one now running is from your own start_tunnel.bat window, and its address is https://forecasts-fool-sword-districts.trycloudflare.com. I stopped the extra tunnels I had started, so only yours is left.
+The Python service is frozen. It's running but hasn't answered anything since about 15:52, and the database hasn't changed since then.
+What to do
+1. Unfreeze the service. Click the start_ingest.bat window and press Esc (or Enter). If the title bar starts with "Select", that confirms the cause: clicking inside a Windows command window pauses the program until you press a key. If nothing changes, close the window and double-click start_ingest.bat again. Wait for Uvicorn running….
+
+2. Update the Send node in n8n Cloud. Change the URL to:
+
+https://forecasts-fool-sword-districts.trycloudflare.com/ingest
+Keep the X-Ingest-Token header and the 600000 timeout. Save.
+
+3. Run the workflow with Execute workflow.
+
+Keep these two windows open and don't click inside them:
+
+start_ingest.bat: the Python service
+start_tunnel.bat: the tunnel. If you ever restart it, the new address is also saved in Capstone1_Newsreader\tunnel.log.
+To stop windows freezing when clicked: right-click the window's title bar → Properties → untick QuickEdit Mode.
+
+Tell me when the service window is unfrozen and I'll check that the tunnel reaches it before you run the workflow.
+
+
+start_tunnel.bat
++4
+-1
+in node ‘Send to Python /ingestThe origin web server did not return a complete response within the 120-second Proxy Read Timeout window. The connection was established, but the origin took too long to respond.
+
+That error means the tunnel gives the service 120 seconds to reply, and the first run takes longer. The service downloads the full text of about 140 articles before it replies, and Cloudflare's free tunnels have a fixed 120-second limit.
+
+The good news is that the request reached the service, so the freeze and the address are fixed. The service probably kept working after the tunnel gave up. Checking:
+
+
+Ran 3 commands
+The batch is still processing (actively using CPU/~2.6GB memory), even though the tunnel timed out waiting. I'll change the service to respond immediately before doing the work, so the 120s timeout no longer applies, then restart once the current batch completes.
+
+
+Read and edited main.py
++51
+-4
+Now I'll test the change on port 8001 with a throwaway database, leaving your running service alone:
+
+Tested background-job ingest on a separate port
+The fix works—the service now responds in 0.004 seconds while the batch completes in the background with unchanged results. Next, I'll check whether the running service has finished the n8n batch.
+
+Checked if the running service finished the batch
+Deleting the stray test entry from the real log file and tying the log location to the database path so this can't happen again. Then I'll check whether your service is still running or frozen.
+
+
+Edited main.py, ran a command
++1
+-1
+The tunnel timeout likely caused n8n to retry the batch (3x), so the service is probably processing duplicates and nothing's been saved after 11 minutes—safe to stop. I'll restart the service with the new code in its own window.
+
+
+Ran 3 commands
+Quick update: the old service didn't actually stop, so the new window I opened probably shows an "address already in use" error. I'll stop the old service properly and start it again:
+
+
+Ran 3 commands
+The timeout is fixed. The service now replies to n8n straight away and does the slow work in the background, so the tunnel's 120-second limit no longer applies. It's restarted with the new code and reachable through your tunnel. It also kept 5 articles from the earlier batch before I stopped it.
+
+On a test batch, the new version replied in 0.004 seconds and finished in the background with the same results as before. It still refuses requests without the password.
+
+Run it again
+In n8n Cloud, click Execute workflow. Leave the Send node as it is (tunnel URL https://forecasts-fool-sword-districts.trycloudflare.com/ingest, password header, timeout).
+
+The Send node will now finish within seconds and show:
+
+{"status": "accepted", "job_id": "20261002-...", "received": 138, "jobs_ahead": 0}
+That means the batch was received, not that it's finished. It takes a few minutes in the background. To see the finished report, open in your browser:
+
+http://127.0.0.1:8000/jobs/latest: shows "status": "running" and then "done", with stored, skipped_near_duplicate and the other counts.
+http://127.0.0.1:8000/health: the articles and chunks counts go up.
+Each finished run is also added to data_chroma\ingest_log.jsonl.
+
+Tidy up your windows
+I restarted the service by stopping the old one and opening a new window. You may have a couple of leftover command windows: your original start_ingest.bat window, and one I opened that probably shows an "address already in use" error. Close any that say "Press any key to continue". Keep open: the new start_ingest.bat window (showing Uvicorn running…) and your start_tunnel.bat window.
+
+I can also add two nodes after Send, Wait 5 minutes → Get job report, so the finished counts show up inside n8n instead of only in your browser.
+
+
+Background command completed
+· Confirm service is up locally and through the tunnel
+That notification was from an earlier status check that only just finished; there's nothing new. The service and tunnel are both up. You can click Execute workflow in n8n Cloud whenever you're ready.
+
+
+main.py
++52
+-5
+executed successfully
+
+Checking what the run stored:
+
+Read latest ingest job report and totals
+Found that 20 duplicate batches got queued because the Send node fired once per article instead of once overall — harmless but wasteful. I'll fix it by enabling "Execute Once" on the Send node in n8n, and on the service side, dedupe identical queued/running batches and only clear finished jobs.
+
+Edited
+main.py
++10
+-2
+Testing the duplicate check on port 8001: sending the same batch 3 times in a row should create only one job.
+
+Tested duplicate-batch protection on separate port
+The fix works—one job was created and the other two duplicates now point to it, without touching the real log. The real batch is still running, so I'll wait for it to finish before restarting the service with this fix.
+
+Waiting until article count stops growing
+running

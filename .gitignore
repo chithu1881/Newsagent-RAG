@@ -1,0 +1,10 @@
+# secrets
+.env
+# local environment and data
+venv/
+data_chroma/
+chroma_db/
+tunnel.log
+__pycache__/
+*.pyc
+.streamlit/secrets.toml
