@@ -152,7 +152,7 @@ def _reranker():
 
 @lru_cache(maxsize=1)
 def _collections():
-    return store.collections()      # (articles, chunks, meta) - local folder or Chroma Cloud
+    return store.collections()      # (articles, chunks, meta) - see rag/store.py
 
 
 def articles_db():

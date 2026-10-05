@@ -7,7 +7,7 @@ Tabs: Ask (chat with citations) · Today's Briefing (top stories by coverage) ·
 Sidebar: filters (categories, optional date range), knowledge-base stats, "Collect news now", clear chat.
 
 On Streamlit Community Cloud: main file app/streamlit_app.py; keys go in the app's Secrets
-(CHROMA_API_KEY, CHROMA_TENANT, CHROMA_DATABASE, ANTHROPIC_API_KEY or GROQ_API_KEY, GH_DISPATCH_TOKEN).
+(ANTHROPIC_API_KEY or GROQ_API_KEY, optional GH_DISPATCH_TOKEN). The news comes from kb.zip on GitHub.
 """
 
 import json
@@ -74,7 +74,7 @@ def all_articles():
 def collection_log():
     meta = engine.meta_db()
     runs, batches = store.list_records(meta, "run"), store.list_records(meta, "ingest")
-    if not store.use_cloud():     # local: also show runs from before reports were kept in the knowledge base
+    if store.source() == "local":     # also show runs from before reports were kept in the knowledge base
         for rows, file, key, when in ((runs, "orchestrator_log.jsonl", "run_id", "finished"),
                                       (batches, "ingest_log.jsonl", "job_id", "time")):
             path = PROJECT_DIR / "data_chroma" / file
@@ -152,6 +152,8 @@ def show_answer(result):
 # ---- sidebar -------------------------------------------------------------------
 
 warm_up()
+if store.sync_from_github(every_seconds=600):     # cloud app: newer kb.zip on GitHub -> use it
+    refresh_data()
 with st.sidebar:
     st.title("📰 News Analyst")
     st.caption("Answers only from collected news · cites every claim · date-aware")

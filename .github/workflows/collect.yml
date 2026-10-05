@@ -1,15 +1,17 @@
-# Scheduled news collection: the 3 fetcher agents + processing run here and write to Chroma Cloud,
-# which the Streamlit Cloud app reads. Repo Settings -> Secrets and variables -> Actions must contain
-# CHROMA_API_KEY, CHROMA_TENANT, CHROMA_DATABASE and optionally GROQ_API_KEY (article summaries),
-# ANTHROPIC_API_KEY (morning briefing) and GNEWS_API_KEY.
+# Scheduled news collection. GitHub itself stores the knowledge base: each run downloads kb.zip from the
+# "kb-data" branch, adds the new news, and saves it back. The Streamlit app downloads that file.
+# No database account or keys needed. Optional repo secrets (Settings -> Secrets and variables ->
+# Actions): GROQ_API_KEY (article summaries), ANTHROPIC_API_KEY (briefing takeaways), GNEWS_API_KEY.
 name: Collect news
 
 on:
   schedule:
-    # 6 runs a day (times in UTC) = 06:45, 09:45, 13:45, 17:45, 21:45, 01:45 India time.
-    # Each run takes ~6-8 minutes, so a private repo stays inside GitHub's 2,000 free minutes a month.
+    # 6 runs a day (times in UTC) = 06:45, 09:45, 13:45, 17:45, 21:45, 01:45 India time
     - cron: "15 1,4,8,12,16,20 * * *"
   workflow_dispatch: {}              # "Run workflow" button for a manual run
+
+permissions:
+  contents: write                    # to save kb.zip on the kb-data branch
 
 concurrency:
   group: collect-news                # never two runs writing at the same time
@@ -20,24 +22,15 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 45
     env:
-      CHROMA_API_KEY: ${{ secrets.CHROMA_API_KEY }}
-      CHROMA_TENANT: ${{ secrets.CHROMA_TENANT }}
-      CHROMA_DATABASE: ${{ secrets.CHROMA_DATABASE }}
       GROQ_API_KEY: ${{ secrets.GROQ_API_KEY }}
       ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
       GNEWS_API_KEY: ${{ secrets.GNEWS_API_KEY }}
       APP_TIMEZONE: Asia/Kolkata
+      KB_SOURCE: local
       BRIEFING_HOUR: "6"             # the 06:45 run writes the morning briefing
-      RETENTION_DAYS: "30"
+      RETENTION_DAYS: "14"           # keeps kb.zip small
     steps:
       - uses: actions/checkout@v4
-
-      - name: Check secrets
-        run: |
-          if [ -z "$CHROMA_API_KEY" ]; then
-            echo "::error::CHROMA_API_KEY is missing. Add it under Settings > Secrets and variables > Actions."
-            exit 1
-          fi
 
       - uses: actions/setup-python@v5
         with:
@@ -56,5 +49,29 @@ jobs:
           path: ~/.cache/huggingface
           key: hf-bge-small-en-v1.5
 
+      - name: Load the current knowledge base
+        id: load
+        run: |
+          if git fetch --depth=1 origin kb-data; then
+            git show origin/kb-data:kb.zip > kb.zip
+            python -m scripts.kb_sync unpack kb.zip
+          else
+            echo "No kb-data branch yet - starting with an empty knowledge base"
+          fi
+
       - name: Collect, process and store
         run: python -m agents.orchestrator --inline
+
+      - name: Save the knowledge base to the kb-data branch
+        # keep what was stored even if collection failed halfway - but never save if loading failed,
+        # because that would replace the real database with an empty one
+        if: always() && steps.load.outcome == 'success'
+        run: |
+          python -m scripts.kb_sync pack kb.zip
+          mkdir publish && mv kb.zip publish/ && cd publish
+          git init -q -b kb-data
+          git add kb.zip
+          git -c user.name="news-collector" -c user.email="actions@users.noreply.github.com" \
+            commit -q -m "Knowledge base $(date -u +'%Y-%m-%d %H:%M') UTC"
+          # one commit that replaces the previous one, so the repository does not grow
+          git push -f "https://x-access-token:${{ github.token }}@github.com/${{ github.repository }}.git" kb-data

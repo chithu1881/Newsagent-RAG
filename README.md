@@ -21,7 +21,7 @@ flowchart TD
         P[🏛️ Politics agent<br/>PIB, The Hindu, Indian Express, Mint]
     end
     T & F & P --> PR[⚙️ Processing agent<br/>dedupe → full text → same-story count → entities → summary → chunk]
-    PR --> KB[(🗄️ Chroma Cloud - or local ChromaDB<br/>bge-small embeddings + metadata:<br/>date, category, source, URL, outlets)]
+    PR --> KB[(🗄️ ChromaDB - saved as kb.zip on GitHub<br/>bge-small embeddings + metadata:<br/>date, category, source, URL, outlets)]
     KB --> R[🔎 RAG engine<br/>understand → hybrid retrieve → rerank → generate → cite]
     R --> UI[💬 Streamlit Cloud app<br/>Ask · Today's Briefing · Browse · Pipeline runs]
 ```
@@ -32,12 +32,12 @@ flowchart TD
 | **Orchestrator** | A LangGraph `StateGraph` runs the three agents in parallel, waits for all of them, hands the batch to processing, then does housekeeping (deletes news older than 30 days, writes the morning briefing). Each feed gets 3 retries with back-off, a crashed agent doesn't stop the others, and processing has a `RetryPolicy`. Every run report is saved in the knowledge base. In the cloud, **GitHub Actions** runs it 6 times a day; locally, APScheduler (`start_agents.bat`). | `agents/orchestrator.py`, `.github/workflows/collect.yml` |
 | *(alternative)* **n8n workflow** | Same flow built visually in n8n: Schedule → RSS → Filter & Tidy → POST /ingest. | `n8n/01_news_fetcher.json` |
 | **Processing agent** | Runs as a FastAPI service (for n8n and the local scheduler) or in-process (`--inline`, GitHub Actions). It drops exact duplicates (URL hash), downloads the full text (trafilatura), and skips near-duplicates (the same story from another outlet: embedding similarity ≥ 0.90 within 3 days) while counting them as extra **outlets** for the original. It also extracts entities (spaCy), writes a 2–3 line summary (Groq), splits text into ~400-token chunks with 50 overlap, embeds them, and stores them. | `ingest/main.py` |
-| **Knowledge base** | **Chroma Cloud** when `CHROMA_API_KEY` is set (shared by the collector, the cloud app and your laptop), otherwise a local ChromaDB folder. Collections: `articles` (dedupe, outlet counts), `chunks` (search) and `meta` (run reports, daily briefings). Metadata on every chunk: `published_ts`, `category`, `source`, `url`, `entities`, `summary`, which enables filters such as *finance, last 7 days*. | `rag/store.py` |
+| **Knowledge base** | One ChromaDB folder. Collections: `articles` (dedupe, outlet counts), `chunks` (search) and `meta` (run reports, daily briefings). Metadata on every chunk: `published_ts`, `category`, `source`, `url`, `entities`, `summary`, which enables filters such as *finance, last 7 days*. In the cloud, GitHub stores it as one file, `kb.zip`, on the `kb-data` branch. | `rag/store.py` |
 | **RAG engine** | ① infers the time range and category from the question; ② hybrid search (Chroma semantic + BM25 keyword, fused with Reciprocal Rank Fusion), splitting compound questions; ③ reranks with the `ms-marco-MiniLM-L-6-v2` cross-encoder plus a recency boost (3-day half-life) and a category boost; ④ the LLM answers **only** from the numbered sources with a date-aware prompt; ⑤ returns the cited sources, or *"I don't have news on that."* when the best match is below the relevance threshold. | `rag/engine.py` |
 | **Today's Briefing** | Top 5 stories per domain from the last 24 h, **ranked by how many outlets covered each story**. Same-story articles are grouped by embedding similarity plus a shared distinctive headline word. Written once each morning and saved in the knowledge base. | `rag/briefing.py` |
 | **Chat interface** | Streamlit app with four tabs: **Ask** (chat with clickable `[n]` citations and dated sources), **Today's Briefing** (two-column layout), **Browse** (search and filter every stored article) and **Pipeline runs** (GitHub Actions and orchestrator reports). The sidebar has category filters, a *Restrict dates* toggle, knowledge-base stats per category, and **Collect news now**. | `app/streamlit_app.py` |
 
-**Stack:** Python 3 · LangGraph · APScheduler (or n8n) · FastAPI · trafilatura · spaCy · sentence-transformers (`BAAI/bge-small-en-v1.5`, `cross-encoder/ms-marco-MiniLM-L-6-v2`) · ChromaDB / Chroma Cloud · rank-bm25 · GitHub Actions · Claude (`claude-opus-5-5`) or Groq Llama · Streamlit
+**Stack:** Python 3 · LangGraph · APScheduler (or n8n) · FastAPI · trafilatura · spaCy · sentence-transformers (`BAAI/bge-small-en-v1.5`, `cross-encoder/ms-marco-MiniLM-L-6-v2`) · ChromaDB · rank-bm25 · GitHub Actions · Claude (`claude-opus-5-5`) or Groq Llama · Streamlit
 
 ## Setup (Windows)
 
@@ -75,27 +75,24 @@ python -m eval.smoke_test                         :: quick pass/fail regression 
 python -m eval.run_eval                           :: 25-question evaluation -> eval/results/
 ```
 
-## Live deployment (always current, no laptop needed)
+## Live deployment (always current, no laptop, no database account)
 
 ```
-GitHub Actions (6x a day)  ──writes──▶  Chroma Cloud  ◀──reads──  Streamlit Cloud app
-  3 agents + processing                 shared store              Ask · Briefing · Browse
+GitHub Actions (6x a day)  ──saves──▶  kb.zip on the "kb-data" branch  ◀──downloads──  Streamlit Cloud app
+  3 agents + processing                (the whole database, one file)                  every 10 minutes
 ```
 
-1. **Chroma Cloud:** sign up at trychroma.com and create a database. Note the **API key**, **tenant** and **database** name.
-2. **Copy the news you already have** (optional, one time): put `CHROMA_API_KEY`, `CHROMA_TENANT` and `CHROMA_DATABASE` into `.env`, then run `python -m scripts.migrate_to_cloud`.
-3. **GitHub:** repo → *Settings → Secrets and variables → Actions → New repository secret*. Add `CHROMA_API_KEY`, `CHROMA_TENANT`, `CHROMA_DATABASE`, and optionally `GROQ_API_KEY` (summaries), `ANTHROPIC_API_KEY` (briefing takeaways) and `GNEWS_API_KEY`. Then go to *Actions → Collect news → Run workflow* to test it.
-4. **Streamlit Cloud:** main file `app/streamlit_app.py` (any Python from 3.11 to 3.14), and these Secrets:
+GitHub itself stores the knowledge base. Each collection run downloads `kb.zip`, adds the new news, deletes news older than 14 days, and saves it back. The branch keeps only the latest copy, so the repository does not grow. The app downloads the file directly, which works without any key because the repository is public.
+
+1. **Nothing to set up for the database.** The workflow is already in `.github/workflows/collect.yml`. To test it, open the **Actions** tab, choose **Collect news** and click **Run workflow**. It shows a green tick after about 8 minutes.
+2. *(optional)* **GitHub secrets** under *Settings → Secrets and variables → Actions*: `GROQ_API_KEY` for article summaries, `ANTHROPIC_API_KEY` for briefing takeaways, `GNEWS_API_KEY` for extra headlines.
+3. **Streamlit Cloud:** main file `app/streamlit_app.py` (any Python from 3.11 to 3.14). In *Secrets*, add only your LLM key:
    ```toml
-   CHROMA_API_KEY = "..."
-   CHROMA_TENANT = "..."
-   CHROMA_DATABASE = "..."
    ANTHROPIC_API_KEY = "..."     # or GROQ_API_KEY
    GH_DISPATCH_TOKEN = "..."     # optional: enables "Collect news now" (fine-grained token, Actions: read and write)
    ```
-   Streamlit installs `app/requirements.txt` (app only, CPU PyTorch). The collector uses `requirements-collector.txt`.
 
-Once `CHROMA_API_KEY` is in your local `.env`, your laptop app reads the same live data. The evaluation always uses the frozen `eval/kb_snapshot`.
+To get the cloud's latest news on your laptop: `python -m scripts.kb_sync pull`. The evaluation always uses the frozen `eval/kb_snapshot`.
 
 ## How the answer stays grounded
 
@@ -113,7 +110,7 @@ rag/         engine.py (RAG), briefing.py (daily briefing), llm.py (Claude / Gro
 app/         Streamlit chat interface
 eval/        questions.csv (25), run_eval.py, smoke_test.py, REPORT.md, results/, kb_snapshot/ (frozen 5 Oct data)
 n8n/         n8n workflow + Code-node scripts (alternative orchestrator)
-scripts/     migrate_to_cloud.py (one-time copy of local news into Chroma Cloud)
+scripts/     kb_sync.py (pack / unpack / pull kb.zip, the database file GitHub stores)
 .github/     workflows/collect.yml (scheduled collector)
 docs/        architecture.svg
 data_chroma/ local ChromaDB + logs when no cloud key is set (git-ignored)

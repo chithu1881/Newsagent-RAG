@@ -16,7 +16,7 @@ import sys
 from datetime import datetime, timedelta
 from pathlib import Path
 
-os.environ["CHROMA_MODE"] = "local"
+os.environ["KB_SOURCE"] = "local"
 os.environ["CHROMA_DIR"] = str(Path(__file__).resolve().parent / "kb_snapshot")
 
 from rag.engine import NO_NEWS, answer, understand  # noqa: E402

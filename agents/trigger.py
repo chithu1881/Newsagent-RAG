@@ -1,7 +1,7 @@
 """
 "Collect news now" from the app.
 
-  Cloud store (Chroma Cloud) -> starts the GitHub Actions workflow (collect.yml) through the GitHub API.
+  Cloud app (news from GitHub) -> starts the GitHub Actions workflow (collect.yml) through the GitHub API.
                                 Needs GH_DISPATCH_TOKEN: a fine-grained token with "Actions: read and write"
                                 on the repo; GH_REPO defaults to chithu1881/Newsagent-RAG.
   Local store                -> runs the orchestrator as a background process on this computer
@@ -33,7 +33,7 @@ def _gh():
 
 def mode():
     """'github', 'github-missing-token' or 'local'."""
-    if store.use_cloud():
+    if store.source() == "github":
         return "github" if os.getenv("GH_DISPATCH_TOKEN") else "github-missing-token"
     return "local"
 
@@ -47,7 +47,7 @@ def collect_now():
         r = requests.post(f"{GH_API}/repos/{repo}/actions/workflows/{WORKFLOW}/dispatches",
                           headers=headers, json={"ref": "main"}, timeout=20)
         if r.status_code == 204:
-            return True, "Started on GitHub Actions. New articles appear in about 8 minutes."
+            return True, "Started on GitHub Actions. New articles appear here in about 20 minutes."
         return False, f"GitHub refused the request ({r.status_code}): {r.text[:150]}"
 
     proc = _local_run["proc"]

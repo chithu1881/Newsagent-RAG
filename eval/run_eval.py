@@ -38,7 +38,7 @@ from pathlib import Path
 EVAL_DIR = Path(__file__).resolve().parent
 # The questions were written for the 5 Oct 2026 knowledge base, frozen in eval/kb_snapshot - never the live
 # (cloud) store, whose contents change every 3 hours and lose old news after RETENTION_DAYS.
-os.environ["CHROMA_MODE"] = "local"
+os.environ["KB_SOURCE"] = "local"
 os.environ["CHROMA_DIR"] = str(EVAL_DIR / "kb_snapshot")
 
 from rag import engine, llm  # noqa: E402

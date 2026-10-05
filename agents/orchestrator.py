@@ -23,8 +23,8 @@ with the others; the processing step is retried 3x by LangGraph (e.g. ingest ser
     venv\\Scripts\\python -m agents.orchestrator --schedule   # every FETCH_EVERY_HOURS
     venv\\Scripts\\python -m agents.orchestrator --briefing   # only (re)write today's briefing
 
-In the cloud, .github/workflows/collect.yml runs "--inline" every 3 hours on GitHub Actions and writes to
-Chroma Cloud (see rag/store.py). The n8n workflow (n8n/01_news_fetcher.json) is the visual alternative;
+In the cloud, .github/workflows/collect.yml runs "--inline" 6 times a day on GitHub Actions and saves the
+database as kb.zip on the repo's kb-data branch (see rag/store.py). The n8n workflow (n8n/01_news_fetcher.json) is the visual alternative;
 it posts to the same /ingest endpoint.
 """
 
