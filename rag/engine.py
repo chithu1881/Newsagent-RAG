@@ -23,18 +23,16 @@ from datetime import datetime, timedelta
 from functools import lru_cache
 from pathlib import Path
 
-import chromadb
 from dotenv import load_dotenv
 
-from rag import llm
+from rag import llm, store
 
 PROJECT_DIR = Path(__file__).resolve().parent.parent
 load_dotenv(PROJECT_DIR / ".env")
 
-CHROMA_DIR = os.getenv("CHROMA_DIR", str(PROJECT_DIR / "data_chroma" / "chroma"))
 EMBED_MODEL = "BAAI/bge-small-en-v1.5"                      # must match ingest/main.py
 QUERY_PREFIX = "Represent this sentence for searching relevant passages: "   # bge query instruction
-RERANK_MODEL = os.getenv("RERANK_MODEL", "BAAI/bge-reranker-base")
+RERANK_MODEL = os.getenv("RERANK_MODEL", "cross-encoder/ms-marco-MiniLM-L-6-v2")   # eval run 3: beat bge-reranker-base, 3x faster
 
 CANDIDATES = 40            # chunks taken from each search before fusion
 RERANK_TOP = 20            # fused chunks sent to the cross-encoder
@@ -57,10 +55,10 @@ CATEGORY_WORDS = {
     "tech": ["ai", "artificial intelligence", "tech", "technology", "startup", "software", "chip",
              "semiconductor", "smartphone", "app", "cyber", "cloud", "telecom", "5g", "openai",
              "google", "apple", "microsoft", "meta", "nvidia", "infosys", "tcs", "wipro", "gadget"],
-    "finance": ["rbi", "repo", "rate cut", "rate hike", "inflation", "sensex", "nifty", "market",
+    "finance": ["finance", "financial", "business", "rbi", "repo", "rate cut", "rate hike", "inflation", "sensex", "nifty", "market",
                 "stock", "share", "ipo", "sebi", "rupee", "bank", "earnings", "results", "gdp",
                 "fii", "mutual fund", "bond", "economy", "gst", "tax", "budget", "investor"],
-    "politics": ["parliament", "lok sabha", "rajya sabha", "minister", "election", "bjp", "congress",
+    "politics": ["political", "politics", "parliament", "lok sabha", "rajya sabha", "minister", "election", "bjp", "congress",
                  "government", "cabinet", "supreme court", "high court", "bill", "opposition",
                  "chief minister", "modi", "policy", "party", "poll", "vote", "governor"],
 }
@@ -97,8 +95,13 @@ def understand(question, now=None):
     best = max(scores.values())
     categories = [c for c, s in scores.items() if s == best] if best > 0 else []
 
+    # "What are the main political stories this week?" asks for a digest of a whole domain, not a topic.
+    # A relevance score for the word "political" means nothing, so these are answered by newest stories.
+    stripped = _strip(question)
+    digest = bool(DIGEST_WORDS.search(question)) and all(w in DOMAIN_WORDS for w in stripped.lower().split())
+
     return {"date_from": date_from, "date_to": date_to, "categories": categories, "time_label": label,
-            "topic": topic_of(question)}
+            "topic": stripped or question, "digest": digest}
 
 
 TIME_PHRASES = re.compile(
@@ -106,13 +109,29 @@ TIME_PHRASES = re.compile(
     r"|(?:this|past|last)\s+(?:week|month)|today'?s?|yesterday|this morning|tonight|lately|recently)\b", re.I)
 FILLER = re.compile(r"\b(?:any|anything|latest|recent|news|updates?|headlines?|stories|story|tell me|"
                     r"about|please|what's new|what is new)\b", re.I)
+# "What were the main ... stories" - a digest request. Its scaffolding has to go too: the eval showed the
+# fragment "What were the main AI policy" scores 0.05 with the cross-encoder, "AI policy" scores 0.68.
+DIGEST_WORDS = re.compile(r"\b(?:stories|news|headlines?|developments|updates?|happenings)\b", re.I)
+DIGEST_SCAFFOLD = re.compile(r"\b(?:(?:what|which)\s+(?:are|were|is|was)\s+)?(?:the\s+)?"
+                             r"(?:main|top|key|biggest|major|important|big)\b", re.I)
+
+
+# Words that only name a domain - a digest question made of these has no real topic
+DOMAIN_WORDS = {"political", "politics", "tech", "technology", "finance", "financial", "business", "market",
+                "markets", "economy", "economic", "national", "india", "indian", "world", "in", "from", "of", "and"}
+
+
+def _strip(question):
+    t = TIME_PHRASES.sub(" ", question)
+    if DIGEST_WORDS.search(t):
+        t = DIGEST_SCAFFOLD.sub(" ", t)
+    t = FILLER.sub(" ", t)
+    return re.sub(r"\s+", " ", t).strip(" ?.!,")
 
 
 def topic_of(question):
     """Question without time phrases and filler - what the cross-encoder should judge relevance on."""
-    t = FILLER.sub(" ", TIME_PHRASES.sub(" ", question))
-    t = re.sub(r"\s+", " ", t).strip(" ?.!,")
-    return t or question
+    return _strip(question) or question
 
 
 # ============================================================
@@ -133,17 +152,19 @@ def _reranker():
 
 @lru_cache(maxsize=1)
 def _collections():
-    client = chromadb.PersistentClient(path=CHROMA_DIR)
-    return (client.get_or_create_collection("chunks", metadata={"hnsw:space": "cosine"}),
-            client.get_or_create_collection("articles", metadata={"hnsw:space": "cosine"}))
-
-
-def chunks_db():
-    return _collections()[0]
+    return store.collections()      # (articles, chunks, meta) - local folder or Chroma Cloud
 
 
 def articles_db():
+    return _collections()[0]
+
+
+def chunks_db():
     return _collections()[1]
+
+
+def meta_db():
+    return _collections()[2]
 
 
 _bm25_cache = {"count": -1}
@@ -159,7 +180,7 @@ def _bm25_corpus():
     count = db.count()
     if _bm25_cache["count"] != count:
         from rank_bm25 import BM25Okapi
-        data = db.get(include=["documents", "metadatas"])
+        data = store.get_all(db, ["documents", "metadatas"])
         _bm25_cache.update(
             count=count, ids=data["ids"], docs=data["documents"], metas=data["metadatas"],
             index=BM25Okapi([_tokens(d) for d in data["documents"]]) if count else None,
@@ -169,13 +190,18 @@ def _bm25_corpus():
 
 def stats():
     db = articles_db()
-    metas = db.get(include=["metadatas"])["metadatas"] if db.count() else []
+    metas = store.get_all(db, ["metadatas"])["metadatas"] if db.count() else []
     per_cat = defaultdict(int)
+    span = {}                                   # category -> (oldest_ts, newest_ts)
     newest = 0
     for m in metas:
-        per_cat[m.get("category", "unknown")] += 1
-        newest = max(newest, m.get("published_ts", 0))
+        cat, ts = m.get("category", "unknown"), m.get("published_ts", 0)
+        per_cat[cat] += 1
+        lo, hi = span.get(cat, (ts, ts))
+        span[cat] = (min(lo, ts), max(hi, ts))
+        newest = max(newest, ts)
     return {"articles": len(metas), "chunks": chunks_db().count(), "per_category": dict(per_cat),
+            "span": {c: (datetime.fromtimestamp(lo), datetime.fromtimestamp(hi)) for c, (lo, hi) in span.items()},
             "newest": datetime.fromtimestamp(newest) if newest else None}
 
 
@@ -322,20 +348,25 @@ def extractive_answer(sources):
     return "\n".join(lines)
 
 
-def answer(question, categories=None, date_from=None, date_to=None, history=None):
+def answer(question, categories=None, date_from=None, date_to=None, history=None, now=None):
     """
     question    - user text
     categories  - UI filter (list of tech/finance/politics); overrides inference
     date_from/to- UI filter (datetime); overrides inference
     history     - previous [(question, answer)] pairs, used to make short follow-ups searchable
+    now         - pretend "now" is this time (evaluation): "today"/"this week" are computed from it and
+                  articles published after it are ignored, so results stay repeatable as new news arrives
     """
     started = time.time()
-    now = datetime.now()
+    frozen_clock = now is not None
+    now = now or datetime.now()
     parsed = understand(question, now)
 
     # UI filters win; otherwise use what was inferred. Inferred categories only *boost*, they don't filter,
     # because many stories span two domains (e.g. an AI bill in Parliament).
     hard_categories = list(categories) if categories else None
+    if parsed["digest"] and not hard_categories and parsed["categories"]:
+        hard_categories = parsed["categories"]          # "main political stories" -> politics only
     d_from = date_from or parsed["date_from"]
     d_to = date_to or parsed["date_to"]
     time_label = parsed["time_label"] if not (date_from or date_to) else (
@@ -348,6 +379,8 @@ def answer(question, categories=None, date_from=None, date_to=None, history=None
 
     ts_from = int(d_from.timestamp()) if d_from else None
     ts_to = int(d_to.timestamp()) if d_to else None
+    if frozen_clock:
+        ts_to = min(ts_to or int(now.timestamp()), int(now.timestamp()))
     # Compound questions ("what did X announce and how did markets react") - search each part, then merge
     parts = [p.strip() for p in re.split(r"\band\s+(?=how|what|why|who|when|where|did|was|were|is|are)\b",
                                          search_query, flags=re.I) if len(p.split()) >= 2]
@@ -357,7 +390,13 @@ def answer(question, categories=None, date_from=None, date_to=None, history=None
             if c["id"] not in seen:
                 seen.add(c["id"])
                 candidates.append(c)
-    ranked = rerank(search_query, candidates, boost_categories=parsed["categories"], now_ts=now.timestamp())
+    if parsed["digest"]:
+        # domain digest: everything in the filter is "relevant" - show the newest stories
+        ranked = sorted(candidates, key=lambda c: c["meta"].get("published_ts", 0), reverse=True)
+        for c in ranked:
+            c["relevance"], c["score"] = 1.0, 1.0
+    else:
+        ranked = rerank(search_query, candidates, boost_categories=parsed["categories"], now_ts=now.timestamp())
 
     info = {"time_label": time_label or "any time", "date_from": d_from, "date_to": d_to,
             "categories_filter": hard_categories or [], "categories_inferred": parsed["categories"],

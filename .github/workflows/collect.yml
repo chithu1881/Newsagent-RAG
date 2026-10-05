@@ -1,0 +1,60 @@
+# Scheduled news collection: the 3 fetcher agents + processing run here and write to Chroma Cloud,
+# which the Streamlit Cloud app reads. Repo Settings -> Secrets and variables -> Actions must contain
+# CHROMA_API_KEY, CHROMA_TENANT, CHROMA_DATABASE and optionally GROQ_API_KEY (article summaries),
+# ANTHROPIC_API_KEY (morning briefing) and GNEWS_API_KEY.
+name: Collect news
+
+on:
+  schedule:
+    # 6 runs a day (times in UTC) = 06:45, 09:45, 13:45, 17:45, 21:45, 01:45 India time.
+    # Each run takes ~6-8 minutes, so a private repo stays inside GitHub's 2,000 free minutes a month.
+    - cron: "15 1,4,8,12,16,20 * * *"
+  workflow_dispatch: {}              # "Run workflow" button for a manual run
+
+concurrency:
+  group: collect-news                # never two runs writing at the same time
+  cancel-in-progress: false
+
+jobs:
+  collect:
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    env:
+      CHROMA_API_KEY: ${{ secrets.CHROMA_API_KEY }}
+      CHROMA_TENANT: ${{ secrets.CHROMA_TENANT }}
+      CHROMA_DATABASE: ${{ secrets.CHROMA_DATABASE }}
+      GROQ_API_KEY: ${{ secrets.GROQ_API_KEY }}
+      ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
+      GNEWS_API_KEY: ${{ secrets.GNEWS_API_KEY }}
+      APP_TIMEZONE: Asia/Kolkata
+      BRIEFING_HOUR: "6"             # the 06:45 run writes the morning briefing
+      RETENTION_DAYS: "30"
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Check secrets
+        run: |
+          if [ -z "$CHROMA_API_KEY" ]; then
+            echo "::error::CHROMA_API_KEY is missing. Add it under Settings > Secrets and variables > Actions."
+            exit 1
+          fi
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+          cache: pip
+          cache-dependency-path: requirements-collector.txt
+
+      - name: Install
+        run: |
+          pip install -r requirements-collector.txt
+          python -m spacy download en_core_web_sm
+
+      - name: Cache embedding model
+        uses: actions/cache@v4
+        with:
+          path: ~/.cache/huggingface
+          key: hf-bge-small-en-v1.5
+
+      - name: Collect, process and store
+        run: python -m agents.orchestrator --inline

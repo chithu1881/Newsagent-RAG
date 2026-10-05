@@ -85,7 +85,7 @@
     <text x="250" y="694" class="xs">Chroma semantic + BM25</text>
     <text x="250" y="710" class="xs">fused with RRF, date filter</text>
     <text x="430" y="676">③ Rerank</text>
-    <text x="430" y="694" class="xs">bge-reranker + recency</text>
+    <text x="430" y="694" class="xs">cross-encoder + recency</text>
     <text x="430" y="710" class="xs">(3-day half-life) + category</text>
     <text x="610" y="676">④ Generate</text>
     <text x="610" y="694" class="xs">Claude / Groq, sources only,</text>

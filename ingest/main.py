@@ -24,12 +24,13 @@ from concurrent.futures import ThreadPoolExecutor
 from datetime import datetime, timezone
 from pathlib import Path
 
-import chromadb
 import trafilatura
 from dotenv import load_dotenv
 from fastapi import FastAPI, Header, HTTPException
 from pydantic import BaseModel
 from sentence_transformers import SentenceTransformer
+
+from rag import store
 
 
 # ============================================================
@@ -39,8 +40,7 @@ from sentence_transformers import SentenceTransformer
 PROJECT_DIR = Path(__file__).resolve().parent.parent
 load_dotenv(PROJECT_DIR / ".env")
 
-CHROMA_DIR = os.getenv("CHROMA_DIR", str(PROJECT_DIR / "data_chroma" / "chroma"))
-LOG_FILE = Path(CHROMA_DIR).parent / "ingest_log.jsonl"
+LOG_FILE = PROJECT_DIR / "data_chroma" / "ingest_log.jsonl"
 EMBED_MODEL = "BAAI/bge-small-en-v1.5"
 GROQ_API_KEY = os.getenv("GROQ_API_KEY", "")
 GROQ_MODEL = os.getenv("GROQ_MODEL", "llama-3.1-8b-instant")
@@ -65,11 +65,11 @@ log = logging.getLogger("ingest")
 log.info("Loading embedding model %s ...", EMBED_MODEL)
 embedder = SentenceTransformer(EMBED_MODEL)
 
-chroma_client = chromadb.PersistentClient(path=CHROMA_DIR)
 # "articles": one row per article (used for duplicate checks)
 # "chunks":   the text pieces the RAG chat searches
-articles_db = chroma_client.get_or_create_collection("articles", metadata={"hnsw:space": "cosine"})
-chunks_db = chroma_client.get_or_create_collection("chunks", metadata={"hnsw:space": "cosine"})
+# "meta":     ingest reports, so the app's Collection log works in the cloud too
+articles_db, chunks_db, meta_db = store.collections()
+log.info("Knowledge base: %s", store.describe())
 
 try:
     import spacy
@@ -139,17 +139,30 @@ def embed(texts):
     return embedder.encode(texts, normalize_embeddings=True).tolist()
 
 
-def is_near_duplicate(vector, published_ts):
+def find_near_duplicate(vector, published_ts):
+    """The stored article that tells the same story (similarity >= 0.90 within 3 days), or None."""
     if articles_db.count() == 0:
-        return False
+        return None
     cutoff = published_ts - NEAR_DUP_DAYS * 86400
     result = articles_db.query(
         query_embeddings=[vector],
         n_results=1,
         where={"published_ts": {"$gte": cutoff}},
+        include=["distances", "metadatas"],
     )
-    distances = result["distances"][0]
-    return bool(distances) and (1 - distances[0]) >= NEAR_DUP_SIMILARITY
+    if result["ids"][0] and (1 - result["distances"][0][0]) >= NEAR_DUP_SIMILARITY:
+        return result["ids"][0][0], result["metadatas"][0][0]
+    return None
+
+
+def count_extra_outlet(match, source):
+    """Same story from another outlet: not stored again, but counted - the briefing ranks stories by it."""
+    aid, meta = match
+    sources = [s for s in meta.get("outlet_names", meta.get("source", "")).split(" | ") if s]
+    if source and source not in sources:
+        sources.append(source)
+    update = {"outlets": int(meta.get("outlets", 1)) + 1, "outlet_names": " | ".join(sources)}
+    articles_db.update(ids=[aid], metadatas=[{**meta, **update}])
 
 
 def extract_entities(text):
@@ -287,7 +300,9 @@ def process_batch(articles, job_id):
             # Step 3: near-duplicates (title + first paragraph)
             lead = article.title + ". " + " ".join(text.split()[:60])
             lead_vector = embed([lead])[0]
-            if is_near_duplicate(lead_vector, published_ts):
+            match = find_near_duplicate(lead_vector, published_ts)
+            if match:
+                count_extra_outlet(match, article.source)
                 report["skipped_near_duplicate"] += 1
                 continue
 
@@ -307,6 +322,8 @@ def process_batch(articles, job_id):
                 "keywords": ", ".join(article.keywords),
                 "summary": summary,
                 "text_type": text_type,
+                "outlets": 1,                      # +1 each time another outlet's copy is skipped
+                "outlet_names": article.source,
             }
 
             # Step 6: chunk + embed + store (title on every chunk helps search)
@@ -339,9 +356,16 @@ def process_batch(articles, job_id):
         "totals": {"articles": articles_db.count(), "chunks": chunks_db.count()},
     }
 
-    # Daily collection report: one line per n8n run
+    # Collection report: one line per batch, locally and in the knowledge base
     LOG_FILE.parent.mkdir(parents=True, exist_ok=True)
     with LOG_FILE.open("a", encoding="utf-8") as f:
         f.write(json.dumps(result) + "\n")
+    store.put_record(meta_db, f"ingest-{job_id}", "ingest", result)
     log.info("ingest report: %s", result)
     return result
+
+
+def process_inline(article_dicts):
+    """Same pipeline without the web service - used by the GitHub Actions collector."""
+    job_id = datetime.now().strftime("%Y%m%d-%H%M%S-inline")
+    return {"status": "done", **process_batch([Article(**a) for a in article_dicts], job_id)}

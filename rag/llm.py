@@ -62,6 +62,15 @@ def describe():
     return "no LLM key - extractive mode"
 
 
+def parts():
+    """(provider, model) for display, e.g. ("Claude", "claude-opus-5-5"); (None, None) without a key."""
+    if PROVIDER == "claude":
+        return "Claude", CLAUDE_MODEL
+    if PROVIDER == "groq":
+        return "Groq", GROQ_MODEL
+    return None, None
+
+
 def chat(system, user, max_tokens=1500):
     """Send one system + user message, return the reply text ('' on failure)."""
     client = _get_client()

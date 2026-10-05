@@ -7,15 +7,22 @@ Checks:
   - query understanding: time ranges and categories are inferred correctly (no models needed)
   - grounding: off-topic questions get "I don't have news on that." with no sources
   - answering: on-topic questions return sources, inside the asked time range, and cite them
-The full RAGAS evaluation (25 questions) is Phase 5 of the plan.
+Runs on the frozen 5 Oct 2026 knowledge base (eval/kb_snapshot) with a frozen clock, so results don't drift.
+The full 25-question evaluation is eval/run_eval.py.
 """
 
+import os
 import sys
 from datetime import datetime, timedelta
+from pathlib import Path
 
-from rag.engine import NO_NEWS, answer, understand
+os.environ["CHROMA_MODE"] = "local"
+os.environ["CHROMA_DIR"] = str(Path(__file__).resolve().parent / "kb_snapshot")
 
-NOW = datetime(2026, 10, 5, 15, 0)
+from rag.engine import NO_NEWS, answer, understand  # noqa: E402
+
+NOW = datetime(2026, 10, 5, 15, 0)      # for the pure understanding checks
+EVAL_NOW = datetime(2026, 10, 5, 23, 0)  # the snapshot's "now" for the answering checks
 results = []
 
 
@@ -40,18 +47,18 @@ check("no time words -> no date filter", u["date_from"] is None and u["date_to"]
 # ---- 2. grounding: must refuse ------------------------------------------------
 for q in ["Who won the IPL final?", "What is a good recipe for paneer butter masala?",
           "What did NASA announce about Mars in 1997?"]:
-    r = answer(q)
+    r = answer(q, now=EVAL_NOW)
     check(f"refuses: {q}", r["answer"].startswith(NO_NEWS[:-1]) and not r["sources"], r["answer"][:80])
 
 # ---- 3. answering: must find sources in range ------------------------------
 for q, cat in [("What is happening with bond yields and the RBI?", "finance"),
                ("Any news about AI companies this week?", "tech"),
                ("What are the main political stories this week?", "politics")]:
-    r = answer(q)
+    r = answer(q, now=EVAL_NOW)
     srcs = r["sources"]
     check(f"answers: {q}", bool(srcs), r["answer"][:80])
     if srcs:
-        week_ago = (datetime.now() - timedelta(days=7)).timestamp()
+        week_ago = (EVAL_NOW - timedelta(days=7)).timestamp()
         check("   sources are within the asked week", all(s["published_ts"] >= week_ago for s in srcs if "week" in q))
         check(f"   top source is {cat}", srcs[0]["category"] == cat, srcs[0]["category"])
         check("   answer cites [n]", "[" in r["answer"], r["answer"][:80])

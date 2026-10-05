@@ -1,0 +1,12 @@
+# Streamlit Community Cloud installs THIS file (it looks next to app/streamlit_app.py first).
+# Only what the chat app needs - collection runs on GitHub Actions (requirements-collector.txt).
+# CPU-only PyTorch for Linux / Python 3.12: the default PyPI build pulls ~3 GB of GPU libraries.
+torch @ https://download.pytorch.org/whl/cpu/torch-2.14.1%2Bcpu-cp312-cp312-manylinux_2_28_x86_64.whl
+streamlit==1.65.0
+chromadb==1.5.9
+sentence-transformers==6.1.0
+rank-bm25==0.2.2
+python-dotenv
+requests
+anthropic
+groq
