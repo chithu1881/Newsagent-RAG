@@ -22,6 +22,22 @@ import streamlit as st
 PROJECT_DIR = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(PROJECT_DIR))
 
+
+def _fresh_project_modules():
+    """Streamlit Cloud pulls new code without restarting Python, and only reloads files inside app/.
+    Without this, an update ran the new page against the old rag/ and agents/ modules (ImportError /
+    AttributeError). When any of their files changed, drop them so the imports below load the new code."""
+    import importlib
+    importlib.invalidate_caches()
+    stamps = {str(f): f.stat().st_mtime for pkg in ("rag", "agents") for f in (PROJECT_DIR / pkg).glob("*.py")}
+    if getattr(sys, "_news_analyst_stamps", None) != stamps:
+        for name in [n for n in sys.modules if n.split(".")[0] in ("rag", "agents")]:
+            del sys.modules[name]
+        sys._news_analyst_stamps = stamps
+
+
+_fresh_project_modules()
+
 # Streamlit Cloud "Secrets" -> environment variables, before the rag modules read them
 try:
     for key, value in st.secrets.items():
